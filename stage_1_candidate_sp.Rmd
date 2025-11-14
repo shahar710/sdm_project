@@ -1,0 +1,50 @@
+---
+title: "stage_1_candidate_sp"
+author: "Shahar Chaikin"
+date: "2025-11-14"
+output: html_document
+---
+Library
+```{r}
+library(tidyverse)
+```
+
+
+```{r}
+biotime_med_fish=read_rds("C:\\Users\\User\\Desktop\\research\\data\\BioTIME 2\\biotime_v2_query_15April25.rds")
+
+m_data=read.csv("C:\\Users\\User\\Desktop\\research\\data\\BioTIME 2\\biotime_v2_metadata_15April25.csv") %>% 
+  filter(STUDY_ID%in%biotime_med_fish$STUDY_ID) %>% 
+  filter(REALM%in%"Marine")
+
+#Keep marine and species level
+biotime_med_fish_marine=biotime_med_fish %>% 
+  filter(STUDY_ID%in%m_data$STUDY_ID,
+         resolution%in%"species") %>% 
+  drop_na(ABUNDANCE)  %>% 
+  mutate(h3_id=h3jsr::point_to_cell(
+    input = sf::st_as_sf(.,
+                         coords = c("LONGITUDE", "LATITUDE"),
+                         crs = 4326),
+    res = 6))
+```
+
+Estimate candidates
+```{r}
+biotime_cand=biotime_med_fish_marine %>% 
+  group_by(h3_id,valid_name) %>% 
+  filter(!max(YEAR)==1992) %>% 
+  summarise(n=n_distinct(SAMPLE_DESC),
+            min_yr=min(YEAR),
+            max_yr=max(YEAR),
+            year_range=max_yr-min_yr,
+            lat_ext=max(LATITUDE)-min(LATITUDE),
+            lon_ext=max(LONGITUDE)-min(LONGITUDE)) %>% 
+  mutate(pop_id=paste(h3_id,valid_name))
+
+#Species level summary
+biotime_cand_sp_level=biotime_cand %>% 
+  group_by(valid_name) %>% 
+  summarise(n_population=n_distinct(pop_id))
+```
+
