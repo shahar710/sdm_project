@@ -101,30 +101,41 @@ spatiotemporal_suitability <- read.csv('predictions/climatic_model_yearly_predic
 # add the polygons 
 suitability_vect <- st_as_sf(spatiotemporal_suitability,sf_column_name = "poly", crs = 4326)
 
+st_write(suitability_vect,
+         'predictions/habitat-suitability-slopes.shp')
+saveRDS(suitability_vect %>% as.tibble(),
+        'predictions/habitat-suitability-slopes.rds')
+
 bbox <- ext(suitability_vect) + 1
 xlims <- bbox[1:2]
 ylims <- bbox[3:4]
 
 library(rnaturalearth)
-world <- ne_countries(scale='medium',returnclass='sf')
+world <- ne_countries(scale='large',returnclass='sf')
 world_crop <- st_crop(world,bbox)
-ggplot(suitability_vect) +
+plot<-ggplot(suitability_vect) +
   # set a nice background 
   # coord_sf(xlim=xlims,
   #   ylim=ylims,
   #   expand=F
   # ) +
-  geom_sf(data=world_crop,fill = 'grey90',color='white')+
   #plot polygons
   geom_sf(aes(fill = estimate,alpha=(1/std.error))
           , color = NA) +   # color = NA removes borders
+  geom_sf(data=world,fill = 'grey90',color='NA')+
+  coord_sf(
+    xlim=xlims,
+    ylim=ylims,
+    expand=F
+  )+
+
   scale_fill_gradient2(high = 'blue',
                        mid = 'white',
                        low = 'red',
                        midpoint=0) +         # or any palette
+
   scale_alpha(range=c(0.9,1)) +
-  theme(panel.background =element_rect(fill='#E5F3FD',
-                                       alpha = 0.5),
+  theme(panel.background =element_rect(fill='#E5F3FD'),
         panel.grid.major = element_blank(),
         panel.grid.minor = element_blank())+
   guides(alpha=F) + 
@@ -132,5 +143,11 @@ ggplot(suitability_vect) +
   #theme_minimal() +
 
   labs(fill = "Estimate")
+
+ggsave('plots/habitat-suitability-estimates-climate-slopes.svg',
+       plot)
+ggsave('plots/habitat-suitability-estimates-climate-slopes.pdf',
+       plot)
+
 ```
 
