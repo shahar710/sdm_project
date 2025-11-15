@@ -4,3 +4,20 @@ author: "Shahar Chaikin"
 date: "2025-11-15"
 output: html_document
 ---
+In this code we will estimate the thermal position of each population used
+Input:
+1) GBIF occurrence (cleaned)
+2) Temperature raster (climate)
+3) Suitability overtime (based on SDM)
+4) Abundance change over time (based on abundance time series lm)
+
+Library
+```{r}
+library(tidyverse)
+```
+
+Load GBIF data
+```{r}
+sjPlot::plot_model(da)
+```
+

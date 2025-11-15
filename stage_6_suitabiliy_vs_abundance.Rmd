@@ -10,9 +10,10 @@ Libraries
 library(tidyverse)
 ```
 
+#Climatic model
 Load abundance output
 ```{r}
-abundance_trends=read_rds("abundance_pred/slopes_df_l_ocellata.rds")
+abundance=read_rds("abundance_pred/slopes_df_l_ocellata.rds")
 ```
 
 Climatic SDM output
@@ -69,3 +70,125 @@ ggsave(plot = abund_suit_trends_p,
        device = "jpeg",width = 15,height = 10,units = "cm")
 ```
 
+#Annual model
+Load abundance output
+```{r}
+abundance_trends=read_rds("abundance_pred/slopes_df_l_ocellata.rds")
+```
+
+Climatic SDM output
+```{r}
+sdm_trends_annual=read_rds("predictions/annual-habitat-suitability-slopes.rds")
+```
+
+Crop based on the abundance output
+```{r}
+abund_suit_trends_annual=abundance_trends %>% 
+  select(h3_id,
+         slope_ab=slope,
+         slope_se_ab=slope_se) %>% 
+  mutate(scaled_slope_ab=scale(slope_ab) %>% as.numeric()) %>% 
+  left_join(sdm_trends_annual %>% 
+              select(h3_id,
+                     slope_sdm=estimate,
+                     slope_se_sdm=std.error) %>% 
+              mutate(scaled_slope_sdm=scale(slope_sdm)%>% as.numeric()),
+            by="h3_id")
+```
+
+Plot relationship
+```{r}
+abund_suit_trends_annual_lm=lm(data=abund_suit_trends_annual,
+                        formula = scaled_slope_ab~scaled_slope_sdm)
+summary(abund_suit_trends_annual_lm)
+abund_suit_trends_annual$scaled_slope_sdm %>% min
+abund_suit_trends_annual$scaled_slope_sdm %>% max
+
+#performance::check_model(abund_suit_trends_annual_lm)
+abund_suit_trends_annual_lm_gg=ggeffects::ggpredict(abund_suit_trends_annual_lm,
+                                             terms= "scaled_slope_sdm [-2.4:0.48 by=0.01]")
+
+#Sclaed
+abund_suit_trends_annual_p=ggplot(data=abund_suit_trends_annual)+
+  geom_vline(xintercept = 0,linetype=2,color = "grey")+
+  geom_hline(yintercept = 0,linetype=2,color = "grey")+
+  geom_abline(slope = 1, intercept = 0, color = "black",alpha=0.4)+
+  geom_point(aes(y=scaled_slope_ab,
+                 x=scaled_slope_sdm),
+             color="grey")+
+  geom_line(data=abund_suit_trends_annual_lm_gg,
+            aes(x=x,y=predicted))+
+  labs(x="Change in habitat suitability (scaled)",
+       y="Change in abundance (scaled)")+
+  coord_cartesian(xlim=c(-2.5,5),
+                  ylim=c(-2.5,5))+
+  theme_classic()
+abund_suit_trends_annual_p
+
+ggsave(plot = abund_suit_trends_annual_p,
+       filename = "./plots/abund_suit_trends_annual_p.png",
+       device = "jpeg",width = 15,height = 10,units = "cm")
+```
+
+Georgos doing correlations
+```{r}
+sdm_trends_annual=read_rds("predictions/annual-habitat-suitability-slopes.rds")
+sdm_trends_clima=read_rds("predictions/habitat-suitability-slopes.rds")
+
+cor(sdm_trends_annual$estimate,sdm_trends_clima$estimate)
+
+delta=sdm_trends_clima$estimate-sdm_trends_annual$estimate
+
+sdm_trends_delta<-cbind(sdm_trends_clima,delta)
+
+sdm_trends_delta_d<-dplyr::select(sdm_trends_delta,!estimate)
+
+str(sdm_trends_delta_d)
+
+#sdm_trends_delta_d
+
+library(sf)
+suitability_vect <- st_as_sf(sdm_trends_delta_d,sf_column_name = "poly", crs = 4326)
+
+library(terra)
+
+bbox <- ext(suitability_vect) + 1
+xlims <- bbox[1:2]
+ylims <- bbox[3:4]
+
+library(rnaturalearth)
+world <- ne_countries(scale='large',returnclass='sf')
+plot<-ggplot(suitability_vect) +
+  # set a nice background 
+  # coord_sf(xlim=xlims,
+  #   ylim=ylims,
+  #   expand=F
+  # ) +
+  #plot polygons
+  geom_sf(aes(fill = delta,alpha=(1/std.error))
+          , color = NA) +   # color = NA removes borders
+  geom_sf(data=world,fill = 'grey90',color='NA')+
+  coord_sf(
+    xlim=xlims,
+    ylim=ylims,
+    expand=F
+  )+
+
+  scale_fill_gradient2(high = 'blue',
+                       mid = 'white',
+                       low = 'red',
+                       midpoint=0) +         # or any palette
+
+  scale_alpha(range=c(0.9,1)) +
+  theme(panel.background =element_rect(fill='#E5F3FD'),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())+
+  guides(alpha="none") + 
+
+  #theme_minimal() +
+
+  labs(fill = "Delta")
+
+plot
+
+```
