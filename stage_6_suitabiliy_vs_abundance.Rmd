@@ -1,0 +1,71 @@
+---
+title: "stage_6_suitabiliy_vs_abundance"
+author: "Shahar Chaikin"
+date: "2025-11-15"
+output: html_document
+---
+
+Libraries
+```{r}
+library(tidyverse)
+```
+
+Load abundance output
+```{r}
+abundance_trends=read_rds("abundance_pred/slopes_df_l_ocellata.rds")
+```
+
+Climatic SDM output
+```{r}
+sdm_trends=read_rds("predictions/habitat-suitability-slopes.rds")
+```
+
+Crop based on the abundance output
+```{r}
+abund_suit_trends=abundance_trends %>% 
+  select(h3_id,
+         slope_ab=slope,
+         slope_se_ab=slope_se) %>% 
+  mutate(scaled_slope_ab=scale(slope_ab) %>% as.numeric()) %>% 
+  left_join(sdm_trends %>% 
+              select(h3_id,
+                     slope_sdm=estimate,
+                     slope_se_sdm=std.error) %>% 
+              mutate(scaled_slope_sdm=scale(slope_sdm)%>% as.numeric()),
+            by="h3_id")
+```
+
+Plot relationship
+```{r}
+abund_suit_trends_lm=lm(data=abund_suit_trends,
+                        formula = scaled_slope_ab~scaled_slope_sdm)
+summary(abund_suit_trends_lm)
+abund_suit_trends$scaled_slope_sdm %>% min
+abund_suit_trends$scaled_slope_sdm %>% max
+
+#performance::check_model(abund_suit_trends_lm)
+abund_suit_trends_lm_gg=ggeffects::ggpredict(abund_suit_trends_lm,
+                                             terms= "scaled_slope_sdm [-1.61:1.037 by=0.01]")
+
+#Sclaed
+abund_suit_trends_p=ggplot(data=abund_suit_trends)+
+  geom_vline(xintercept = 0,linetype=2,color = "grey")+
+  geom_hline(yintercept = 0,linetype=2,color = "grey")+
+  geom_abline(slope = 1, intercept = 0, color = "black",alpha=0.4)+
+  geom_point(aes(y=scaled_slope_ab,
+                 x=scaled_slope_sdm),
+             color="grey")+
+  geom_line(data=abund_suit_trends_lm_gg,
+            aes(x=x,y=predicted))+
+  labs(x="Change in habitat suitability (scaled)",
+       y="Change in abundance (scaled)")+
+  coord_cartesian(xlim=c(-2,5),
+                  ylim=c(-2,5))+
+  theme_classic()
+abund_suit_trends_p
+
+ggsave(plot = abund_suit_trends_p,
+       filename = "abund_suit_trends_p.png",
+       device = "jpeg",width = 15,height = 10,units = "cm")
+```
+
