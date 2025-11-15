@@ -1,0 +1,225 @@
+---
+title: "GBIF download SDM course"
+author: "Georgios Vagenas"
+date: "2025-11-14"
+output: html_document
+---
+
+```{r}
+library(tidyverse)
+library(terra)
+
+l_scele_gbif=read_delim("C:/Users/geo_v/Desktop/SDM course/SDM_project/0033870-251025141854904/0033870-251025141854904.csv", delim = "\t") %>% 
+  select(gbifID,species,decimalLatitude,decimalLongitude,coordinateUncertaintyInMeters,year,basisOfRecord,occurrenceStatus,countryCode,month,year) %>% 
+  filter(basisOfRecord%in%"HUMAN_OBSERVATION",
+         year>=1980,
+         occurrenceStatus%in%"PRESENT") %>% 
+  rename(lat=decimalLatitude,
+         lon=decimalLongitude)
+
+
+#Plot occurrences
+l_scele_gbif_vect=terra::vect(l_scele_gbif,geom=c("lon","lat")) #vectorize df
+terra::crs(l_scele_gbif_vect)=terra::crs("EPSG:4326") #set crs
+
+# Load built-in world map from terra
+#Plot
+world_sf <- rnaturalearth::ne_countries(scale = "medium", returnclass = "sf")
+# Convert to SpatVector
+world_vect <- vect(world_sf)
+
+plot(world_vect, col = "lightgray", border = "white", main = "GBIF Points treat_1")
+plot(l_scele_gbif_vect,add=T)
+
+#Remove duplicates
+l_scele_gbif_lite=l_scele_gbif %>% 
+  distinct(lat,lon,countryCode,month,year)
+
+#plot treat2
+#Plot occurrences
+l_scele_gbif_lite_vect=terra::vect(l_scele_gbif_lite,geom=c("lon","lat")) #vectorize df
+terra::crs(l_scele_gbif_lite_vect)=terra::crs("EPSG:4326") #set crs
+
+plot(world_vect, col = "lightgray", border = "white", main = "GBIF Points treat_2")
+terra::plot(l_scele_gbif_lite_vect,add=T)
+
+#install.packages("GeoThinneR")
+require(GeoThinneR)
+#Spatial thinning to reduce sampling effort
+
+# Step 1: Apply grid-based thinning
+thinned_result <-GeoThinneR::thin_points(data=l_scele_gbif_lite,
+                                         lon_col="lon",
+                                         lat_col="lat",
+                                         group_col=NULL,
+                                         method="grid",
+                                         trials=1,
+                                         thin_dist=5,
+                                         verbose = TRUE
+)
+
+thinned_result$retained
+
+thinned_result
+
+plot(thinned_result)
+
+#
+#Bind thinning df
+l_scele_gbif_lite_thin=cbind(l_scele_gbif_lite,thinned_result$retained) %>% 
+  rename(is_retained=6)
+
+l_scele_gbif_lite_thin
+
+
+
+#plot treat3
+#Plot occurrences
+l_scele_gbif_lite_thin_vect=terra::vect(l_scele_gbif_lite_thin,geom=c("lon","lat")) #vectorize df
+terra::crs(l_scele_gbif_lite_thin_vect)=terra::crs("EPSG:4326") #set crs
+
+l_scele_gbif_lite_thin_vect
+
+# Crop raster
+#roi_extent <- ext(min(l_scele_gbif_lite_thin$lon),
+#                  max(l_scele_gbif_lite_thin$lat),
+#                  min(l_scele_gbif_lite_thin$lon),
+#                  max(l_scele_gbif_lite_thin$lat))  # example for NA
+
+roi_extent <- ext(-90, -35, 25, 65)  # xmin, xmax, ymin, ymax
+
+plot(roi_extent)
+p_crop2 <- crop(l_scele_gbif_lite_thin_vect, roi_extent)
+world_vect_crop2 <- crop(world_vect, roi_extent)
+
+plot(world_vect_crop2,
+     col = "antiquewhite",
+     border = "NA",
+     main = "GBIF Points treat_3",
+     background="skyblue")
+terra::plot(l_scele_gbif_lite_thin_vect,add=T,cex=0.5)
+```
+
+Write cleaned data
+```{r}
+write.csv(l_scele_gbif_lite_thin,"C:/Users/geo_v/Desktop/SDM course/SDM_project/raja_gbif_lite_thin.csv",row.names = F)
+```
+
+```{r}
+
+library(sf)
+
+#l_scele_gbif_lite_thin
+
+# Remove rows where is_retained is FALSE
+l_scele_gbif_lite_thin <- l_scele_gbif_lite_thin[l_scele_gbif_lite_thin$is_retained, ]
+
+# Add H3 hexagon ID column
+l_scele_gbif_lite_thin_hexs <- l_scele_gbif_lite_thin %>%
+  mutate(h3_id = h3jsr::point_to_cell(
+    input = sf::st_as_sf(.,
+                         coords = c("lon", "lat"),  # Fixed column names
+                         crs = 4326), res = 6))
+
+
+nrow(l_scele_gbif_lite_thin_hexs)
+
+
+write.csv(l_scele_gbif_lite_thin_hexs,"C:/Users/geo_v/Desktop/SDM course/SDM_project/raja_gbif_lite_thin_hexs_5thinned.csv",row.names = F)
+
+```
+
+```{r}
+marineco<-vect("C:/Users/geo_v/Downloads/marine_eco_spalding/meow_ecos_expl_clipped_expl.shp")
+
+vectfish<-vect(l_scele_gbif_lite_thin_hexs)
+vectfish
+marineco
+
+
+# This gives you points with polygon attributes, but we want the polygons
+intersecting_data <- terra::intersect(marineco, vectfish)
+
+# Get the unique polygon IDs that have points
+polygon_ids <- unique(intersecting_data$ECO_CODE)
+
+# Subset marineco to only polygons that intersect with points
+marineco_intersecting <- marineco[marineco$ECO_CODE %in% polygon_ids, ]
+
+# Now you have the actual polygons
+marineco_intersecting
+plot(marineco_intersecting)
+marineco_intersecting
+
+#remove the isolated polygon
+
+library(terra)
+library(igraph)
+
+# Get adjacency as edge list
+adj_edges <- adjacent(marineco_intersecting)
+
+# Create graph from edge list
+graph <- igraph::graph_from_edgelist(adj_edges, directed = FALSE)
+
+# Get the number of polygons
+n_polygons <- nrow(marineco_intersecting)
+
+# Check if all polygons are in the graph
+all_vertices <- 1:n_polygons
+current_vertices <- as.integer(V(graph))
+
+# Find missing vertices (isolated polygons)
+missing_vertices <- setdiff(all_vertices, current_vertices)
+
+# Add isolated vertices to the graph
+if (length(missing_vertices) > 0) {
+  graph <- add_vertices(graph, length(missing_vertices))
+}
+
+# Now find connected components
+components <- igraph::components(graph)
+
+# Add group identifier
+marineco_intersecting$connected_group <- components$membership
+
+# Check the grouping
+table(marineco_intersecting$connected_group)
+
+# Aggregate only if there are multiple polygons in a group
+aggregated_list <- list()
+for (group_id in unique(marineco_intersecting$connected_group)) {
+  group_polygons <- marineco_intersecting[marineco_intersecting$connected_group == group_id, ]
+  
+  if (nrow(group_polygons) > 1) {
+    # Aggregate multiple polygons
+    aggregated_group <- aggregate(group_polygons)
+    aggregated_list[[as.character(group_id)]] <- aggregated_group
+  } else {
+    # Keep single polygon as is
+    aggregated_list[[as.character(group_id)]] <- group_polygons
+  }
+}
+
+# keep only the large polygon
+
+final_aggregated_pol<-aggregated_list$`2`
+
+
+# 
+# vectfish_buffered <- terra::buffer(dissolved_marineco_intersecting, width = 30000)  # 10 km buffer
+# mapview(dissolved_marineco_intersecting)
+# mapview(vectfish_buffered)
+# 
+# library(geodata)
+# 
+# earth<-world(resolution=5, level=0)
+# earth_agg<-aggregate(earth)
+# mapview(vectfish_buffered)
+# final_buff<-erase(vectfish_buffered,earth_agg)
+# mapview(final_buff)
+
+terra::writeVector(final_aggregated_pol, "C:/Users/geo_v/Desktop/SDM course/SDM_project/study_area_extent_updated.shp",overwrite=TRUE)
+
+
+```
