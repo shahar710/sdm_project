@@ -128,3 +128,46 @@ nrow(l_scele_gbif_lite_thin_hexs)
 write.csv(l_scele_gbif_lite_thin_hexs,"C:/Users/geo_v/Desktop/SDM course/SDM_project/raja_gbif_lite_thin_hexs_5thinned.csv",row.names = F)
 
 ```
+
+```{r}
+marineco<-vect("C:/Users/geo_v/Downloads/marine_eco_spalding/meow_ecos_expl_clipped_expl.shp")
+
+vectfish<-vect(l_scele_gbif_lite_thin_hexs)
+vectfish
+marineco
+
+
+# This gives you points with polygon attributes, but we want the polygons
+intersecting_data <- terra::intersect(marineco, vectfish)
+
+# Get the unique polygon IDs that have points
+polygon_ids <- unique(intersecting_data$ECO_CODE)
+
+# Subset marineco to only polygons that intersect with points
+marineco_intersecting <- marineco[marineco$ECO_CODE %in% polygon_ids, ]
+
+# Now you have the actual polygons
+marineco_intersecting
+plot(marineco_intersecting)
+marineco_intersecting
+dissolved_marineco_intersecting<-terra::aggregate(marineco_intersecting)
+mapview(dissolved_marineco_intersecting)
+
+dissolved_marineco_intersecting
+
+vectfish_buffered <- terra::buffer(dissolved_marineco_intersecting, width = 30000)  # 10 km buffer
+mapview(dissolved_marineco_intersecting)
+mapview(vectfish_buffered)
+
+library(geodata)
+
+earth<-world(resolution=5, level=0)
+earth_agg<-aggregate(earth)
+mapview(vectfish_buffered)
+final_buff<-erase(vectfish_buffered,earth_agg)
+mapview(final_buff)
+
+terra::writeVector(final_buff, "C:/Users/geo_v/Desktop/SDM course/SDM_project/study_area_extent.shp")
+
+
+```
