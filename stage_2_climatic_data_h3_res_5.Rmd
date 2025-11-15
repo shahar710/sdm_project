@@ -1,0 +1,126 @@
+---
+title: "stage_2_climatic_data"
+author: "Shahar Chaikin"
+date: "2025-11-14"
+output: html_document
+---
+
+Libraries
+```{r}
+library(stars)
+library(tidyverse)
+```
+
+#1) Bottom temperature
+Load data
+```{r}
+bottomT_df=stars::read_ncdf("./raw_env/bottomT_l_ocellata.nc") %>% 
+  as_tibble() %>% 
+  drop_na(bottomT)
+
+#Unique h3 ids
+unique_h3=bottomT_df %>% 
+  distinct(longitude,latitude) %>% 
+  mutate(h3_id=h3jsr::point_to_cell(
+    input = sf::st_as_sf(.,
+                         coords = c("longitude", "latitude"),
+                         crs = 4326),
+    res = 5))
+
+#Add h3_ids
+bottomT_df_h3=bottomT_df %>% 
+  left_join(unique_h3,
+            by=c("longitude", "latitude")) %>% 
+  mutate(year=lubridate::year(time)) %>% 
+  group_by(h3_id,year) %>% 
+  summarise(btemp_mean=mean(bottomT)) %>% 
+  ungroup()
+
+bottomT_df_h3$btemp_mean=as.numeric(bottomT_df_h3$btemp_mean)
+
+#test
+bottomT_df_h3_test=bottomT_df_h3 %>% 
+  group_by(h3_id) %>% 
+  summarise(n_yr=n_distinct(year))
+```
+
+Write
+```{r}
+saveRDS(bottomT_df_h3,"bottomT_df_h3_res_5_2.rds")
+```
+
+#2) Salinity
+Load data
+```{r}
+sal_df=stars::read_ncdf("./raw_env/salinity_l_ocellata.nc") %>% 
+  as_tibble() %>% 
+  drop_na(so)
+
+#Unique h3 ids
+unique_h3_sal=sal_df %>% 
+  distinct(longitude,latitude) %>% 
+  mutate(h3_id=h3jsr::point_to_cell(
+    input = sf::st_as_sf(.,
+                         coords = c("longitude", "latitude"),
+                         crs = 4326),
+    res = 5))
+
+#Add h3_ids
+sal_df_h3=sal_df %>% 
+  left_join(unique_h3_sal,
+            by=c("longitude", "latitude")) %>% 
+  mutate(year=lubridate::year(time)) %>% 
+  group_by(h3_id,year) %>% 
+  summarise(sal_mean=mean(so)) %>% 
+  ungroup()
+
+sal_df_h3$sal_mean=as.numeric(sal_df_h3$sal_mean)
+
+#test
+sal_df_h3_test=sal_df_h3 %>% 
+  group_by(h3_id) %>% 
+  summarise(n_yr=n_distinct(year))
+```
+
+Write
+```{r}
+saveRDS(sal_df_h3,"./sal_df_h3_2_res_5.rds")
+```
+
+#2) mixed layer
+Load data
+```{r}
+ml_df=stars::read_ncdf("./raw_env/mixed_layer_thick_l_ocellata.nc") %>% 
+  as_tibble() %>% 
+  drop_na(mlotst)
+
+#Unique h3 ids
+unique_h3_ml=ml_df %>% 
+  distinct(longitude,latitude) %>% 
+  mutate(h3_id=h3jsr::point_to_cell(
+    input = sf::st_as_sf(.,
+                         coords = c("longitude", "latitude"),
+                         crs = 4326),
+    res = 5))
+
+#Add h3_ids
+ml_df_h3=ml_df %>% 
+  left_join(unique_h3_ml,
+            by=c("longitude", "latitude")) %>% 
+  mutate(year=lubridate::year(time)) %>% 
+  group_by(h3_id,year) %>% 
+  summarise(ml_mean=mean(mlotst)) %>% 
+  ungroup()
+
+ml_df_h3$ml_mean=as.numeric(ml_df_h3$ml_mean)
+
+#test
+ml_df_h3_test=ml_df_h3 %>% 
+  group_by(h3_id) %>% 
+  summarise(n_yr=n_distinct(year))
+```
+
+Write
+```{r}
+saveRDS(ml_df_h3,"./ml_df_h3_res_5.rds")
+```

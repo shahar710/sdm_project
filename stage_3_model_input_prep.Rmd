@@ -14,21 +14,82 @@ library(tidyverse)
 
 Load env.
 ```{r}
-env=read_rds("bottomT_df_h3_2.rds") %>% 
-  left_join(read_rds("sal_df_h3_2.rds"),
+env=read_rds("./bottomT_df_h3_res_5_2.rds") %>% 
+  left_join(read_rds("sal_df_h3_2_res_5.rds"),
             by=c("h3_id","year")) %>% 
-  left_join(read_rds("mixed.rds"),
+  left_join(read_rds("ml_df_h3_res_5.rds"),
             by=c("h3_id","year")) %>% 
-  select(-n_months) %>% 
   mutate(centroids=h3jsr::cell_to_point(h3_id),
     lon = sf::st_coordinates(centroids)[, 1],
     lat = sf::st_coordinates(centroids)[, 2]) %>% 
   select(-centroids)
 
-#Vectorize env
+#load gbif
+l_raja_gbif=read.csv("raja_gbif_lite_thin_hexs_5thinned.csv") %>% 
+  select(-is_retained,-h3_id) %>% 
+  mutate(h3_id=h3jsr::point_to_cell(
+    input = sf::st_as_sf(.,
+                         coords = c("lon", "lat"),
+                         crs = 4326),
+    res = 5))
+
+#Do all h3 in gbif represented by env?
+setdiff(l_raja_gbif$h3_id %>% unique,env$h3_id %>% unique)
+setdiff(c(1,2,3,4,5),c(1,2,3,4,5,6,7,8))
+#bind
+l_raja_gbif_env=l_raja_gbif %>% 
+  select(-lat,-lon) %>% 
+  left_join(env %>% 
+              select(-lat,-lon),
+            by=c("h3_id","year")) %>% 
+  mutate(occ=1)
+```
+
+Plot the hex
+```{r}
+l_raja_gbif_env_poly=l_raja_gbif %>% 
+  mutate(poly=h3jsr::cell_to_polygon(h3_id))
+
+l_raja_gbif_env_poly_vect=terra::vect(l_raja_gbif_env_poly$poly)
+world <- terra::vect(rnaturalearth::ne_countries(scale = "medium", returnclass = "sf"))
+terra::plot(world)
+terra::plot(l_raja_gbif_env_poly_vect,add=T)
+mapview::mapview(l_raja_gbif_env_poly_vect)
+```
+
+Plot
+```{r}
+ggplot(l_raja_gbif_env)+
+  geom_histogram(aes(x=year),bins = 10)
+
+ggplot(l_raja_gbif_env)+
+  geom_point(aes(x=year,y=btemp_mean))
+
+ggplot(l_raja_gbif_env)+
+  geom_point(aes(x=year,y=sal_mean))
+
+ggplot(l_raja_gbif_env)+
+  geom_point(aes(x=year,y=ml_mean))
+```
+
+Plot occurrences for every time bin
+```{r}
+ggplot(l_raja_gbif)+
+ # geom_point(aes(y=lat,x=lon,color=year))+
+  geom_jitter(aes(y=lat,x=lon,color=year),width = 1)+
+  theme_bw()+
+  labs(x="Longitude",
+       y="Latitude")
+
+```
+
+
+Vectorize env
+```{r}
 env_geo=terra::vect(env,geom=c("lon","lat")) #vectorize df
 terra::crs(env_geo)=terra::crs("EPSG:4326") #set crs
 ```
+
 
 Load marine ecoregions
 ```{r}
@@ -109,12 +170,11 @@ terra::plot(mlotst_rast,add=T)
 
 Load the species GIBF points
 ```{r}
-#Load
-l_raja_gbif=read.csv("raja_gbif_lite_thin_hexs_5thinned.csv") %>% 
-  select(-is_retained)
 #Vectorize
 l_raja_gbif_vect=terra::vect(l_raja_gbif,geom=c("lon","lat"))
 terra::crs(l_raja_gbif_vect)=terra::crs("EPSG:4326") #set crs
+
+terra::plot(l_raja_gbif_vect)
 #Extract env in gbif
 l_raja_gbif_env=bind_cols(terra::extract(btemp_rast ,l_raja_gbif_vect,ID=F),
                           terra::extract(sal_rast ,l_raja_gbif_vect,ID=F),
