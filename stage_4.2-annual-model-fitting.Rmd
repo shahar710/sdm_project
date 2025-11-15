@@ -1,0 +1,160 @@
+---
+title: "stage_4.2-annual-model-fitting"
+output: html_document
+---
+
+```{r}
+library(dplyr)
+library(terra)
+library(mapview)
+library(sf)
+```
+
+# load-data
+```{r}
+
+full_env=readRDS("res_5_env/bottomT_df_h3_res_5_2.rds") %>% 
+  left_join(readRDS("res_5_env/sal_df_h3_2_res_5.rds"),
+            by=c("h3_id","year")) %>% 
+  left_join(readRDS("res_5_env/ml_df_h3_res_5.rds"),
+            by=c("h3_id","year")) %>% 
+  mutate(poly=h3jsr::cell_to_polygon(h3_id))
+
+global_poly_vect <- st_as_sf(full_env,sf_column_name = "poly", crs = 4326)
+
+# grab ecoregions
+ecoregions <- vect('study_area/study_area_extent_updated.shp')
+global_t <- vect(global_poly_vect)
+ecor_poly <- intersect(global_t,ecoregions) # this is slow code 
+
+#ecor_poly <- vect('environmental-vars-ecoregion-clipped/annual-env-vars-polygons.shp')
+
+mapview(ecor_poly)
+```
+
+# crop polygons to ecoregion
+```{r}
+
+
+### CHECK CORRELATIONS 
+library(corrplot)
+cors <-cor(values(ecor_poly)[,2:4])
+corrplot(cors)
+
+library(usdm)
+vif <- vif(data.frame(values(ecor_poly)[,2:4]))
+vif
+```
+
+Loading presences 
+```{r}
+presence <- read.csv('raja_gbif_lite_thin_hexs_5thinned.csv') %>%
+  select(-is_retained,-h3_id) %>% 
+  mutate(occ=1,
+         h3_id=h3jsr::point_to_cell(
+    input=sf::st_as_sf(.,
+                       coords=c('lon','lat'),
+                       crs=4326),
+    res=5
+  ))
+
+library(tidyverse)
+merged <- left_join(presence,values(ecor_poly),by=c('h3_id','year')) %>%
+  drop_na() %>%
+  mutate(occ=1)
+
+presence_table <- merged %>% 
+  select(occ,h3_id,year,btemp_mean,sal_mean,ml_mean)
+```
+
+background points 
+```{r}
+### NEED TO CONSIDER WHETHER NUMBER OF BACKGROUND POINTS SCALES WITH TIME 
+set.seed(1)
+bg_size <- nrow(values(ecor_poly[ecor_poly$year==1993,]))  # jsut grab one year to get number of hexagons 
+samplesize<-round(bg_size *0.05)
+n_unique_years <- length(unique(ecor_poly$year))
+samplesizebyyear <- round(samplesize/n_unique_years)
+
+
+unique_years <- unique(ecor_poly$year)
+year2extract<-1993
+bgs<-lapply(unique_years, function(year2extract){
+  print(year2extract)
+  subset <- ecor_poly[ecor_poly$year==year2extract,]
+  sample <- sample(subset,samplesizebyyear)
+  bg <- values(sample)
+  bg$year <- year2extract
+  bg
+})
+bg_table <- do.call(rbind,bgs)
+
+bg_table <- bg_table %>% 
+  mutate(occ=0) %>%
+  select(occ,h3_id,year,
+         btemp_mean,sal_mean,ml_mean)
+
+table <- rbind(bg_table,presence_table)
+table(table$occ)
+
+write.csv(table,
+          file = 'model-data/data-input-annual-sdm.csv',
+          row.names = F)
+```
+
+# train a model 
+```{r}
+library(sdm)
+sdm::installAll()          
+df <- read.csv('model-data/data-input-annual-sdm.csv')
+
+# prepare sdmdata object 
+formula <- occ~btemp_mean+sal_mean+ml_mean
+mData <- sdmData(formula,
+                 train = df[df$occ==1,],
+                 bg = df[df$occ==0,])
+mData
+m1 <- sdm(formula,
+    data=mData,
+    methods=c('glm','brt','rf'),
+    replication=c('boot'),
+    test.p=30,
+    n=10,
+    parallelSetting=list(ncore=5,method='parallel'))
+gui(m1)
+write.sdm(m1,
+          'models/annual-m1.sdm',
+          overwrite = T)
+
+
+
+```
+
+Look at model outputs 
+```{r}
+#
+m1 <- read.sdm('models/annual-m1.sdm')
+
+rcurves_glm <- rcurve(m1,id=c(1:10))
+plot(rcurves_glm)
+
+rcurves_brt <- rcurve(m1,id=c(11:20))
+library(ggplot2)
+plot(rcurves_brt,
+     gg=F,
+     show.data=T)
+
+rcurves_rf <- rcurve(m1,id=c(21:30))
+plot(rcurves_rf)
+
+hist(table$btemp_mean[table$occ==1])
+hist(table$ml_mean[table$occ==1])
+
+
+r <- rcurve(m1,id=21,gg=F,xlim=c(0,30))
+plot(r,ylim=c(0,30))
+
+rcurve <- rcurve(m1)
+plot(rcurve)
+```
+

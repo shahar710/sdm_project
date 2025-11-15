@@ -1,0 +1,31 @@
+---
+title: "marginal-densities"
+author: "WM"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+download data 
+```{r}
+library(stars)
+library(tidyverse)
+library(terra)
+library(devtools)
+library(remotes)
+```
+
+look at rasters
+```{r}
+files <- list.files('env_rast_croped_marine_ecore/',
+                    pattern='.tif$',
+                    full.names = T)
+
+rast <- rast(files)
+plot(rast)
+```
+
+
