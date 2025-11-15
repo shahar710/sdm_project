@@ -14,10 +14,10 @@ library(tidyverse)
 
 Load env.
 ```{r}
-env=read_rds("./bottomT_df_h3_res_5_2.rds") %>% 
-  left_join(read_rds("sal_df_h3_2_res_5.rds"),
+env=read_rds("./res_5_env/bottomT_df_h3_res_5_2.rds") %>% 
+  left_join(read_rds("./res_5_env/sal_df_h3_2_res_5.rds"),
             by=c("h3_id","year")) %>% 
-  left_join(read_rds("ml_df_h3_res_5.rds"),
+  left_join(read_rds("./res_5_env/ml_df_h3_res_5.rds"),
             by=c("h3_id","year")) %>% 
   mutate(centroids=h3jsr::cell_to_point(h3_id),
     lon = sf::st_coordinates(centroids)[, 1],
@@ -74,13 +74,40 @@ ggplot(l_raja_gbif_env)+
 
 Plot occurrences for every time bin
 ```{r}
-ggplot(l_raja_gbif)+
- # geom_point(aes(y=lat,x=lon,color=year))+
-  geom_jitter(aes(y=lat,x=lon,color=year),width = 1)+
-  theme_bw()+
-  labs(x="Longitude",
-       y="Latitude")
+world <- rnaturalearth::ne_countries(scale = "medium", returnclass = "sf")
+# Calculate bounding box of your points
+bbox <- l_raja_gbif %>%
+  summarise(
+    xmin = min(lon)-3,
+    xmax = max(lon)+3,
+    ymin = min(lat)-3,
+    ymax = max(lat)+3
+  )
 
+
+# Plot cropped map
+gbif_map_time=ggplot() +
+  geom_sf(data = world, fill = "gray90", color = "white") +
+  geom_jitter(
+    data = l_raja_gbif,
+    aes(x = lon, y = lat, color = year),
+    alpha = 0.7,
+    width=0.3
+  ) +
+  coord_sf(
+    xlim = c(bbox$xmin, bbox$xmax),
+    ylim = c(bbox$ymin, bbox$ymax),
+    expand = FALSE
+  ) +
+  theme_bw() +
+  labs(
+    x = "Longitude",
+    y = "Latitude",
+    color = "Year",
+    title = "GBIF Occurrences over time"
+  )
+
+ggsave(plot = gbif_map_time,filename = "gbif_map_time.png",device = "jpeg",width = 20,height = 20,units = "cm")
 ```
 
 

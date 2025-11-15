@@ -9,7 +9,34 @@ Library
 library(tidyverse)
 ```
 
+Data entries:
+ID_ALL_RAW_DATA Unique BioTIME identifier for record
 
+ABUNDANCE Double representing the abundance for the record (see metadata for details of ABUNDANCE_TYPE
+
+BIOMASS Double representing the biomass for the record(see metadata for details of BIOMASS_TYPE ID_SPECIES Unique identifier linking to the species table
+
+SAMPLE_DESC Concatenation of variables comprising unique sampling event
+
+LATITUDE Latitude of record
+
+LONGITUDE Longitude of record
+
+DEPTH Depthor elevation of record if available
+
+DAY Numerical day of record
+
+MONTH Numerical value of month for record, i.e. January=1
+
+YEAR Year of record
+
+STUDY_ID BioTIME study unique identifier
+
+newID Validated species identifier key
+
+valid_name Highest taxonomic resolution of individual, preferred is genus and species resolution Level of resolution, i.e. ’species’ represented by genus and species taxon Higher level taxonomic grouping, i.e. Fish
+
+#Find candidates
 ```{r}
 biotime_med_fish=read_rds("C:\\Users\\User\\Desktop\\research\\data\\BioTIME 2\\biotime_v2_query_15April25.rds")
 
@@ -46,5 +73,357 @@ biotime_cand=biotime_med_fish_marine %>%
 biotime_cand_sp_level=biotime_cand %>% 
   group_by(valid_name) %>% 
   summarise(n_population=n_distinct(pop_id))
+```
+
+#Std. abundances
+Grid samples by h3_id
+```{r}
+#Consider resampling to maintain equal sampling effort
+##grid by hexagons
+biotime_med_fish_marine_h3_l_ocel=biotime_med_fish_marine %>% 
+  mutate(h3_id = h3jsr::point_to_cell(
+    input = sf::st_as_sf(.,
+                         coords = c("LONGITUDE", "LATITUDE"),
+                         crs = 4326),
+    res = 5),
+    assemblageID=paste(STUDY_ID,h3_id,sep = "_"),
+    unique_pop_id=paste(valid_name,STUDY_ID,h3_id,sep = "_")) %>% 
+  select(study_id=STUDY_ID,
+         sample_id=SAMPLE_DESC,
+         lat=LATITUDE,
+         long=LONGITUDE,
+         h3_id,
+         assemblageID,
+         unique_pop_id,
+         year=YEAR,
+         valid_name,
+         abund=ABUNDANCE) %>% 
+  filter(valid_name%in%"Leucoraja ocellata")
+
+
+#How many sp and samples per study?
+check_samples <- biotime_med_fish_marine_h3_l_ocel %>% 
+  group_by(study_id,h3_id,assemblageID, year) %>% 
+  summarise(n_samples = n_distinct(sample_id), n_species = n_distinct(valid_name))
+check_samples$n_samples %>% hist
+check_samples$n_samples %>% quantile()
+```
+
+Resample
+Consider resampling samples (i.e., SAMPLE_DESC) within assemblageID (study within hexagon) to maintain equale sampling effort over the years. Chose the cutoff of how many samples per year to sample.
+```{r}
+#remove populations that were annualy poorly sampled (<3)
+biotime_med_fish_marine_h3_poorly=biotime_med_fish_marine_h3_l_ocel %>% 
+  group_by(unique_pop_id,year) %>% 
+  filter(n_distinct(sample_id)>=3) %>% 
+  ungroup()
+
+check_samples2 <- biotime_med_fish_marine_h3_poorly %>% 
+  group_by(assemblageID,unique_pop_id,study_id,h3_id,year) %>% 
+  summarise(n_samples = n_distinct(sample_id), n_species = n_distinct(valid_name))
+
+#resample within assamblage IDs according to these values
+check_samples2_min=check_samples2 %>% 
+  group_by(unique_pop_id) %>% 
+  filter(n_samples==min(n_samples)) %>% 
+  distinct(unique_pop_id,n_samples)
+
+#How many assamblages?
+biotime_med_fish_marine_h3_poorly$assemblageID %>% n_distinct()
+```
+
+#Resample for equal samp_effort:
+Defining the Fixed Effort (m): The code first calculates the required number of distinct samples, m, for every unique_pop_id within an assemblageID.
+
+It finds the annual count of distinct sample_ids for that group.
+
+It then takes the minimum of these counts across all years. This minimum value, m, becomes the target effort.
+
+Enforcing the Fixed Effort: In the resampling loop, the do() function, combined with sample(..., size = m, replace = FALSE), is executed for every assemblageID/unique_pop_id/year group:
+
+group_by(assemblageID, unique_pop_id, year) ensures the operation is applied year-by-year for each population.
+
+sample(distinct_samples, size = m, ...) randomly selects exactly m distinct sample_ids from the available samples for that year.
+
+By forcing the selection of m distinct samples for every year, the code eliminates the variation in effort that was caused by differences in sampling intensity between years.
+
+In essence, the entire procedure reduces the higher-sampled years down to the effort level of the lowest-sampled year, thus creating a balanced dataset where the sampling effort (i.e., the number of distinct samples used) is constant across all years for a given population.
+
+```{r}
+# Load necessary libraries
+library(rlang) # Required for non-standard evaluation
+
+# Assuming the data is already loaded and named 'biotime_med_fish_marine_h3_poorly'
+
+# Set the number of iterations
+n_iterations <- 100
+
+# 1. Calculate the minimum annual sample count per unique_pop_id within an assemblageID
+min_samples_df <- biotime_med_fish_marine_h3_poorly %>%
+  # Group by the required levels for calculating the minimum
+  group_by(assemblageID, unique_pop_id, year) %>%
+  # Count the number of distinct samples for each group
+  summarise(n_samples = n_distinct(sample_id), .groups = "drop") %>%
+  # Re-group to find the minimum sample count per unique_pop_id across all years
+  group_by(assemblageID, unique_pop_id) %>%
+  # Find the minimum sample count for this unique_pop_id across all its years
+  # This is the 'fixed sampling effort' (m)
+  summarise(min_n_samples = min(n_samples), .groups = "drop")
+
+# 2. Resampling and Iteration
+
+# A list to store the results of each iteration
+resampled_data_list <- list()
+
+# A tibble to track the number of times each row (species record) was used
+# Initialize with a count of 0 for every row in the original data
+n_used_tracker <- biotime_med_fish_marine_h3_poorly %>%
+  # Assign a unique row_id for easy tracking
+  mutate(row_id = row_number()) %>%
+  select(row_id) %>%
+  mutate(n_used = 0)
+
+# Function to perform one iteration of resampling
+resample_iteration <- function(data, min_counts) {
+  # Join the data with the pre-calculated minimum sample counts
+  data_with_min <- data %>%
+    left_join(min_counts, by = c("assemblageID", "unique_pop_id"))
+
+  # Resample according to 'min_n_samples'
+  resampled_df <- data_with_min %>%
+    group_by(assemblageID, unique_pop_id, year) %>%
+    # Use 'slice_sample' to randomly select 'min_n_samples' distinct sample_ids
+    # from the current group (assemblageID, unique_pop_id, year).
+    # 'replace = FALSE' ensures sampling without replacement.
+    # The 'n' argument is set dynamically by the 'min_n_samples' column.
+    # NOTE: The selection is based on distinct 'sample_id', and all rows
+    # associated with the selected 'sample_id' are kept *if* the group size
+    # for the unique_pop_id, year is > 0.
+    # A more rigorous selection based on *distinct* sample_id first:
+    do({
+        # Get distinct sample_ids for the current group
+        distinct_samples <- unique(.$sample_id)
+        # Get the required minimum count (m)
+        m <- first(.$min_n_samples)
+
+        # Ensure m is not NA and is positive
+        if (is.na(m) || m <= 0) {
+            # Skip if no valid minimum count exists
+            return(tibble())
+        }
+
+        # Select 'm' distinct sample_ids without replacement
+        selected_sample_ids <- sample(
+            distinct_samples,
+            size = min(m, length(distinct_samples)), # Use min to avoid error if m > available
+            replace = FALSE
+        )
+
+        # Filter the original data rows for these selected sample_ids
+        # Return all rows corresponding to the selected sample_ids
+        filter(., sample_id %in% selected_sample_ids)
+    }) %>%
+    ungroup() %>%
+    # Remove the temporary column
+    select(-min_n_samples)
+
+  return(resampled_df)
+}
+
+# Run the iterations and track usage
+for (i in 1:n_iterations) {
+   # SET SEED HERE for reproducibility of the random sampling step
+  set.seed(42 + i) # Use a seed that changes but is deterministic based on the iteration
+
+  # 1. Perform resampling
+  resampled_iteration <- resample_iteration(biotime_med_fish_marine_h3_poorly %>% mutate(row_id = row_number()), min_samples_df)
+
+  # 2. Store the result (for mean abundance calculation)
+  # Add an iteration identifier
+  resampled_data_list[[i]] <- resampled_iteration %>%
+    mutate(iteration = i)
+
+  # 3. Update the usage tracker ('n_used')
+  # Get the row_ids that were selected in this iteration
+  selected_row_ids <- resampled_iteration$row_id
+
+  # Update the counts in the tracker
+  n_used_tracker <- n_used_tracker %>%
+    mutate(
+      n_used = ifelse(row_id %in% selected_row_ids, n_used + 1, n_used)
+    )
+}
+
+# 3. Final Aggregation
+
+# Combine all iteration results
+all_resampled_data <- bind_rows(resampled_data_list)
+
+# Calculate the mean abundance (mean of 'abund' column)
+mean_abundance_df <- all_resampled_data %>%
+  # Group by all identifiers and year
+  group_by(h3_id, assemblageID, unique_pop_id, lat, long, year) %>%
+  # Calculate the mean abundance across all iterations for this group
+  summarise(
+    mean_abundance = mean(abund, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# Join the mean abundance with the usage count
+# Note: The usage count 'n_used' is per original row, which doesn't directly
+# map to the aggregated groups. Instead, we can calculate the *total* times a
+# unique_pop_id was sampled *across all iterations*.
+
+# Calculate n_used (total selection count across all iterations for each unique_pop_id)
+# This is a bit ambiguous in the prompt: "n_used (which is the number of times
+# a certain species was selected across all iterations)". Assuming it means the
+# *total number of observations (rows) used* for that final aggregated group.
+n_used_aggregated <- all_resampled_data %>%
+  # Group by the final aggregation levels
+  group_by(h3_id, assemblageID, unique_pop_id, lat, long, year) %>%
+  # Count the total number of rows used across all 100 iterations
+  summarise(
+    n_used = n(),
+    .groups = "drop"
+  )
+
+# Final Dataset Creation
+final_dataset <- mean_abundance_df %>%
+  # Join with the aggregated n_used count
+  left_join(n_used_aggregated, by = c("h3_id", "assemblageID", "unique_pop_id", "lat", "long", "year"))
+
+#Population summary
+pop_summary=final_dataset %>% 
+  group_by(unique_pop_id) %>% 
+  summarise(years_sampled=n_distinct(year),
+            min_yr=min(year),
+            max_yr=max(year),
+            ann_range=(max(year)-min(year))+1,
+            coverage=years_sampled/ann_range) %>% 
+  filter(years_sampled>=3)
+#clean based on year cutoff
+final_dataset_cutoff=final_dataset %>% 
+  filter(unique_pop_id%in%pop_summary$unique_pop_id)
+
+final_dataset_cutoff$unique_pop_id %>% n_distinct()
+```
+
+Population summary
+```{r}
+final_dataset_cutoff %>% summary
+```
+
+#Estimate slope
+```{r}
+library(broom)
+# Fit linear models per unique_pop_id
+slopes_df <- final_dataset_cutoff %>%
+  group_by(unique_pop_id,h3_id) %>%
+  nest() %>%
+  mutate(
+    model = map(data, ~ lm(mean_abundance ~ year, data = .x)),
+    tidy_out = map(model, ~ tidy(.x, conf.int = TRUE))) %>%
+  unnest(tidy_out) %>%
+  filter(term == "year") %>%
+  select(unique_pop_id, estimate, std.error, conf.low, conf.high) %>%
+  mutate(weights=(1/std.error)) %>% 
+  rename(
+    slope = estimate,
+    slope_se = std.error,
+    slope_ci_low = conf.low,
+    slope_ci_high = conf.high) %>% 
+  left_join(pop_summary %>% 
+              select(unique_pop_id,min_yr,max_yr),
+            by = "unique_pop_id") %>% 
+  ungroup() %>% 
+  mutate(centroids=h3jsr::cell_to_point(h3_id),
+    lon = sf::st_coordinates(centroids)[, 1],
+    lat = sf::st_coordinates(centroids)[, 2]) %>% 
+  select(-centroids)
+```
+
+Summary
+```{r}
+ggplot()+
+  geom_density(data=slopes_df,
+                 aes(x=slope),
+               fill="grey")+
+  geom_vline(xintercept = slopes_df %>% 
+               summarise(mean_slope=mean(slope)) %>% 
+               pull())+
+  geom_vline(xintercept = 0,
+             linetype="dashed")+
+  theme_bw()
+```
+
+Slopes by latitude
+```{r}
+lm_alope_lat=lm(data=slopes_df,
+                formula = slope~lat,
+                weights=weights)
+lm_alope_lat %>% summary
+
+
+ggplot(slopes_df)+
+  geom_point(aes(x=lat,y=slope,size=1/slope_se))+
+  theme_classic()+
+  labs(y="Slope",x="Latitude",size="Inverse SE")+
+  geom_smooth(formula = y~x,
+              aes(x=lat,y=slope),
+              method = "lm")
+```
+
+Map slopes
+```{r}
+slopes_df_spat=slopes_df %>% 
+  mutate(poly=h3jsr::cell_to_polygon(h3_id))
+```
+
+map
+```{r}
+# Load world map
+world <- rnaturalearth::ne_countries(scale = "large", returnclass = "sf")
+
+# Calculate bounding box with buffer
+bbox <- slopes_df_spat %>%
+  summarise(
+    xmin = min(lon) - 2,
+    xmax = max(lon) + 2,
+    ymin = min(lat) - 2,
+    ymax = max(lat) + 2
+  )
+
+# Extract bounding box values
+xlim_vals <- c(bbox$xmin[[1]], bbox$xmax[[1]])
+ylim_vals <- c(bbox$ymin[[1]], bbox$ymax[[1]])
+
+# Plot
+# Convert to sf and set geometry column
+slopes_df_spat_sf <- st_as_sf(slopes_df_spat, sf_column_name = "poly")
+
+slope_map_p=ggplot() +
+  geom_sf(
+    data = slopes_df_spat_sf,
+    aes(fill = slope)
+  ) +
+    geom_sf(data = world, fill = "gray90", color = "white") +
+    coord_sf(
+    xlim = xlim_vals,
+    ylim = ylim_vals,
+    expand = FALSE
+  ) +
+  theme_bw() +
+  labs(
+    x = "Longitude",
+    y = "Latitude",
+    fill = "Slope",
+    title = "GBIF Occurrences over Time"
+  )+
+  scale_fill_gradient2(high="blue",
+                       mid="white",
+                       low="red",midpoint = 0)
+
+
+ggsave(plot = slope_map_p,filename = "slope_map_p.png",device = "jpeg",width = 20,height = 15,units = "cm")
 ```
 
