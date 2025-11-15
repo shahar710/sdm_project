@@ -46,7 +46,7 @@ bottomT_df_h3_test=bottomT_df_h3 %>%
 
 Write
 ```{r}
-write_rds(bottomT_df_h3,"./bottomT_df_h3.rds")
+saveRDS(bottomT_df_h3,"./bottomT_df_h3_2.rds")
 ```
 
 #2) Salinity
@@ -84,5 +84,5 @@ sal_df_h3_test=sal_df_h3 %>%
 
 Write
 ```{r}
-write_rds(sal_df_h3,"./sal_df_h3.rds")
+saveRDS(sal_df_h3,"./sal_df_h3_2.rds")
 ```

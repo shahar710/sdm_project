@@ -1,0 +1,29 @@
+---
+title: "stage_3_model_input_prep"
+author: "Shahar Chaikin"
+date: "2025-11-15"
+output: html_document
+---
+
+Crop the annual environment layers to the marine biogeographical regions and 
+produce a dataset ready to be used for sdm
+
+```{r}
+library(tidyverse)
+```
+
+Load env.
+```{r}
+env=read_rds("bottomT_df_h3_2.rds") %>% 
+  left_join(read_rds("sal_df_h3_2.rds"),
+            by=c("h3_id","year")) %>% 
+  left_join(read_rds("mixed.rds"),
+            by=c("h3_id","year")) %>% 
+  select(-n_months)
+```
+
+Crop env to marine biogeographical region
+```{r}
+
+```
+
