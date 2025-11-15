@@ -340,6 +340,8 @@ slopes_df <- final_dataset_cutoff %>%
     lon = sf::st_coordinates(centroids)[, 1],
     lat = sf::st_coordinates(centroids)[, 2]) %>% 
   select(-centroids)
+
+saveRDS(slopes_df,"./abundance_pred/slopes_df_l_ocellata.rds")
 ```
 
 Summary
