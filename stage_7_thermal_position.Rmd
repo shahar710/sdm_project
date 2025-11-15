@@ -1,0 +1,6 @@
+---
+title: "stage_7_thermal_position"
+author: "Shahar Chaikin"
+date: "2025-11-15"
+output: html_document
+---
