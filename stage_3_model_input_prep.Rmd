@@ -1,0 +1,189 @@
+---
+title: "stage_3_model_input_prep"
+author: "Shahar Chaikin"
+date: "2025-11-15"
+output: html_document
+---
+
+Crop the annual environment layers to the marine biogeographical regions and 
+produce a dataset ready to be used for sdm
+
+```{r}
+library(tidyverse)
+```
+
+Load env.
+```{r}
+env=read_rds("./bottomT_df_h3_res_5_2.rds") %>% 
+  left_join(read_rds("sal_df_h3_2_res_5.rds"),
+            by=c("h3_id","year")) %>% 
+  left_join(read_rds("ml_df_h3_res_5.rds"),
+            by=c("h3_id","year")) %>% 
+  mutate(centroids=h3jsr::cell_to_point(h3_id),
+    lon = sf::st_coordinates(centroids)[, 1],
+    lat = sf::st_coordinates(centroids)[, 2]) %>% 
+  select(-centroids)
+
+#load gbif
+l_raja_gbif=read.csv("raja_gbif_lite_thin_hexs_5thinned.csv") %>% 
+  select(-is_retained,-h3_id) %>% 
+  mutate(h3_id=h3jsr::point_to_cell(
+    input = sf::st_as_sf(.,
+                         coords = c("lon", "lat"),
+                         crs = 4326),
+    res = 5))
+
+#Do all h3 in gbif represented by env?
+setdiff(l_raja_gbif$h3_id %>% unique,env$h3_id %>% unique)
+setdiff(c(1,2,3,4,5),c(1,2,3,4,5,6,7,8))
+#bind
+l_raja_gbif_env=l_raja_gbif %>% 
+  select(-lat,-lon) %>% 
+  left_join(env %>% 
+              select(-lat,-lon),
+            by=c("h3_id","year")) %>% 
+  mutate(occ=1)
+```
+
+Plot the hex
+```{r}
+l_raja_gbif_env_poly=l_raja_gbif %>% 
+  mutate(poly=h3jsr::cell_to_polygon(h3_id))
+
+l_raja_gbif_env_poly_vect=terra::vect(l_raja_gbif_env_poly$poly)
+world <- terra::vect(rnaturalearth::ne_countries(scale = "medium", returnclass = "sf"))
+terra::plot(world)
+terra::plot(l_raja_gbif_env_poly_vect,add=T)
+mapview::mapview(l_raja_gbif_env_poly_vect)
+```
+
+Plot
+```{r}
+ggplot(l_raja_gbif_env)+
+  geom_histogram(aes(x=year),bins = 10)
+
+ggplot(l_raja_gbif_env)+
+  geom_point(aes(x=year,y=btemp_mean))
+
+ggplot(l_raja_gbif_env)+
+  geom_point(aes(x=year,y=sal_mean))
+
+ggplot(l_raja_gbif_env)+
+  geom_point(aes(x=year,y=ml_mean))
+```
+
+Plot occurrences for every time bin
+```{r}
+ggplot(l_raja_gbif)+
+ # geom_point(aes(y=lat,x=lon,color=year))+
+  geom_jitter(aes(y=lat,x=lon,color=year),width = 1)+
+  theme_bw()+
+  labs(x="Longitude",
+       y="Latitude")
+
+```
+
+
+Vectorize env
+```{r}
+env_geo=terra::vect(env,geom=c("lon","lat")) #vectorize df
+terra::crs(env_geo)=terra::crs("EPSG:4326") #set crs
+```
+
+
+Load marine ecoregions
+```{r}
+marine_regions=terra::vect("study_area/study_area_extent.shp")
+terra::plot(marine_regions)
+```
+
+Crop env to marine biogeographical region
+```{r}
+#Intersect the environment with the marine env
+env_geo_marine_ecore=terra::intersect(x = env_geo,y = marine_regions)
+terra::plot(marine_regions)
+terra::plot(env_geo_marine_ecore,add=T)
+
+# Define raster template (e.g., from env_geo or marine_regions)
+template_rast <- terra::rast(env_geo)
+
+#Rasterize the output
+#Rasterize bottom temperature
+btemp_rast <- terra::rasterize(env_geo_marine_ecore, template_rast, field = "btemp_mean")
+terra::writeRaster(btemp_rast, filename="./env_data_croped_marine_ecore/btemp_rast.tif")
+
+#Rasterize salinity
+sal_rast <- terra::rasterize(env_geo_marine_ecore, template_rast, field = "sal_mean")
+terra::writeRaster(sal_rast, filename="./env_data_croped_marine_ecore/sal_rast.tif")
+
+#Rasterize mixed layer depth
+mlotst_rast <- terra::rasterize(env_geo_marine_ecore, template_rast, field = "mlotst_mean")
+terra::writeRaster(mlotst_rast, filename="./env_data_croped_marine_ecore/mlotst_rast.tif")
+
+# Overlay raster
+env_geo_mar_df=env_geo_marine_ecore %>% 
+  as_tibble() %>% 
+  mutate(centroids=h3jsr::cell_to_point(h3_id),
+    lon = sf::st_coordinates(centroids)[, 1],
+    lat = sf::st_coordinates(centroids)[, 2]) %>% 
+  select(-centroids,-FID)
+```
+
+Plot env
+```{r}
+# Save high-resolution PNG of bottom temperature raster
+# Load world map as vector
+world <- terra::vect(rnaturalearth::ne_countries(scale = "medium", returnclass = "sf"))
+
+# Save high-resolution PNG
+png("btemp_raster_plot.png", width = 2000, height = 1600, res = 300)
+# Plot world map zoomed to Bay of Fundy
+terra::plot(world, xlim = c(-90, -40), ylim = c(20, 70),
+            col = "lightgray",
+            main = "Bottom temp. (°C)",
+            background="white")
+# Overlay raster
+terra::plot(btemp_rast, add = TRUE)
+dev.off()
+
+# Save high-resolution PNG
+png("sal_raster_plot.png", width = 2000, height = 1600, res = 300)
+# Plot world map zoomed to Bay of Fundy
+terra::plot(world, xlim = c(-90, -40), ylim = c(20, 70),
+            col = "lightgray",
+            main = "Salinity (PSU)",
+            background="white")
+terra::plot(sal_rast,add=T)
+# Overlay raster
+dev.off()
+
+
+# Save high-resolution PNG
+png("ml_raster_plot.png", width = 2000, height = 1600, res = 300)
+# Plot world map zoomed to Bay of Fundy
+terra::plot(world, xlim = c(-90, -40), ylim = c(20, 70),
+            col = "lightgray",
+            main = "Mixed layer depth (m)",
+            background="white")
+terra::plot(mlotst_rast,add=T)
+```
+
+Load the species GIBF points
+```{r}
+#Vectorize
+l_raja_gbif_vect=terra::vect(l_raja_gbif,geom=c("lon","lat"))
+terra::crs(l_raja_gbif_vect)=terra::crs("EPSG:4326") #set crs
+
+terra::plot(l_raja_gbif_vect)
+#Extract env in gbif
+l_raja_gbif_env=bind_cols(terra::extract(btemp_rast ,l_raja_gbif_vect,ID=F),
+                          terra::extract(sal_rast ,l_raja_gbif_vect,ID=F),
+                          terra::extract(mlotst_rast ,l_raja_gbif_vect,ID=F)) %>% 
+  rename(btemp=1,sal=2,mixl=3) %>% 
+  bind_cols(l_raja_gbif) %>% 
+  select(lat,lon,h3_id,btemp,sal,mixl,country=countryCode,month,year)
+
+write.csv(l_raja_gbif_env,"l_raja_gbif_env.csv",row.names = F)
+```
+
+
