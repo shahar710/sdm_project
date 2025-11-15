@@ -1,0 +1,156 @@
+---
+title: "scratch-backgrounds"
+output: html_document
+---
+
+```{r}
+library(dplyr)
+library(terra)
+library(mapview)
+```
+
+# making and looking at polygons global 
+```{r}
+
+full_env=readRDS("res_5_env/bottomT_df_h3_res_5_2.rds") %>% 
+  left_join(readRDS("res_5_env/sal_df_h3_2_res_5.rds"),
+            by=c("h3_id","year")) %>% 
+  left_join(readRDS("res_5_env/ml_df_h3_res_5.rds"),
+            by=c("h3_id","year")) %>% 
+  mutate(centroids=h3jsr::cell_to_point(h3_id),
+    lon = sf::st_coordinates(centroids)[, 1],
+    lat = sf::st_coordinates(centroids)[, 2]) %>% 
+  select(-centroids)
+
+global_env <- full_env %>%
+  group_by(h3_id) %>%
+  summarise(btemp_global = mean(btemp_mean),
+         sal_global = mean(sal_mean),
+         ml_global = mean(ml_mean)) %>%
+  ungroup()
+
+
+
+
+
+global_poly <- global_env %>%
+  mutate(poly=h3jsr::cell_to_polygon(h3_id))
+
+str(global_poly)
+library(sf)
+global_poly_vect <- st_as_sf(global_poly,sf_column_name = "poly", crs = 4326)
+
+mapview(global_poly_vect)
+```
+
+# crop polygons to ecoregion
+```{r}
+ecoregions <- vect('study_area/study_area_extent_updated.shp')
+global_t <- vect(global_poly_vect)
+ecor_poly <- intersect(global_t,ecoregions)
+names(ecor_poly)
+mapview(ecor_poly,zcol='sal_global')
+
+### CHECK CORRELATIONS 
+library(corrplot)
+cors <-cor(values(ecor_poly)[,2:4])
+corrplot(cors)
+
+library(usdm)
+vif <- vif(data.frame(values(ecor_poly)[,2:4]))
+vif
+```
+
+Loading presences 
+```{r}
+presence <- read.csv('raja_gbif_lite_thin_hexs_5thinned.csv') %>%
+  select(-is_retained,-h3_id) %>% 
+  mutate(occ=1,
+         h3_id=h3jsr::point_to_cell(
+    input=sf::st_as_sf(.,
+                       coords=c('lon','lat'),
+                       crs=4326),
+    res=5
+  ))
+
+merged <- left_join(presence,values(ecor_poly),by='h3_id') %>%
+  na.omit()
+
+presence_table <- merged %>% 
+  select(occ,h3_id,btemp_global,sal_global,ml_global) %>% 
+  distinct(h3_id, .keep_all = TRUE)
+
+
+set.seed(1)
+bg_size <- nrow(values(ecor_poly))
+samplesize<-round(bg_size *0.05)
+s <- sample(bg_size,samplesize)
+
+bg_poly <- ecor_poly[s,]
+mapview(bg_poly)
+table(is.na(bg_poly))
+bg <- values(bg_poly)
+
+bg_table <- bg %>% 
+  mutate(occ = 0) %>% 
+  select(occ,h3_id,btemp_global,sal_global,ml_global)
+
+table <- rbind(bg_table,presence_table)
+table(table$occ)
+
+write.csv(table,
+          file = 'model-data/data-input-climate-sdm.csv',
+          row.names = F)
+```
+
+# train a model 
+```{r}
+library(sdm)
+sdm::installAll()          
+df <- read.csv('model-data/data-input-climate-sdm.csv')
+
+# prepare sdmdata object 
+formula <- occ~btemp_global+sal_global+ml_global
+mData <- sdmData(formula,
+                 train = df[df$occ==1,],
+                 bg = df[df$occ==0,])
+
+m1 <- sdm(formula,
+    data=mData,
+    methods=c('glm','brt','rf'),
+    replication=c('boot'),
+    test.p=30,
+    n=10,
+    parallelSetting=list(ncore=5,method='parallel'))
+
+write.sdm(m1,
+          'models/climatic-m1.sdm',
+          overwrite = T)
+
+
+
+```
+
+Look at model outputs 
+```{r}
+#
+m1 <- read.sdm('models/climatic-m1.sdm')
+m1@models$occ$glm$`1`
+
+rcurves_glm <- rcurve(m1,id=c(1:10))
+plot(rcurves_glm)
+
+rcurves_brt <- rcurve(m1,id=c(11:20))
+plot(rcurves_brt)
+
+rcurves_rf <- rcurve(m1,id=c(21:30))
+plot(rcurves_rf)
+
+
+r <- rcurve(m1,id=21)
+plot(r)
+
+rcurve <- rcurve(m1)
+plot(rcurve)
+```
+

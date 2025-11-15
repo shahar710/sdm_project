@@ -1,0 +1,153 @@
+---
+title: "stage_5_climatic_model_yearly_predictions"
+output: html_document
+---
+
+```{r}
+library(dplyr)
+library(h3jsr)
+```
+
+load environment 
+```{r}
+full_env=readRDS("res_5_env/bottomT_df_h3_res_5_2.rds") %>% 
+  left_join(readRDS("res_5_env/sal_df_h3_2_res_5.rds"),
+            by=c("h3_id","year")) %>% 
+  left_join(readRDS("res_5_env/ml_df_h3_res_5.rds"),
+            by=c("h3_id","year")) %>% 
+  mutate(poly=h3jsr::cell_to_polygon(h3_id))
+
+global_poly_vect <- st_as_sf(full_env,sf_column_name = "poly", crs = 4326)
+
+# grab ecoregions
+ecoregions <- vect('study_area/study_area_extent_updated.shp')
+global_t <- vect(global_poly_vect)
+ecor_poly <- intersect(global_t,ecoregions)
+
+writeVector(ecor_poly,
+            'environmental-vars-ecoregion-clipped/annual-env-vars-polygons.shp')
+```
+
+reload env vars
+```{r}
+ecor_poly <- vect('environmental-vars-ecoregion-clipped/annual-env-vars-polygons.shp')
+values(ecor_poly)
+```
+
+
+
+load model 
+```{r}
+m <- read.sdm(filename = 'models/climatic-m1.sdm')
+```
+
+predict 
+```{r}
+library(dplyr)
+full_env <- values(ecor_poly) # get dataframe from polygons 
+years2predict <- unique(full_env$year)
+
+timeseries_predictions <- lapply(years2predict,function(year_of_choice){
+    print(paste0('Starting prediction for year: ',year_of_choice))
+
+    subs <- full_env %>%
+      filter(year == year_of_choice) %>% 
+      as.data.frame()
+    
+    length(unique(subs$h3_id))==nrow(subs)
+  
+    subs2pred <- subs %>%
+      dplyr::select(btemp_mean,sal_mean,ml_mean,h3_id) %>%
+      rename(btemp_global = btemp_mean,
+             sal_global = sal_mean,
+             ml_global = ml_mean,)
+
+    p <- ensemble(m,subs2pred)
+    
+    spatial_p <- subs2pred %>%
+      as.data.frame() %>% 
+      dplyr::select(h3_id) %>%
+      mutate(#poly=h3jsr::cell_to_polygon(h3_id),
+            year=year_of_choice,
+             prediction=p$ensemble_weighted
+             ) # add prediction
+  }) # lapply loops
+
+timeseries_predictions_long <- do.call(rbind,timeseries_predictions)
+write.csv(timeseries_predictions_long,
+          'predictions/climatic_model_yearly_predictions.csv')
+```
+
+grid-level slopes
+```{r}
+library(broom)
+library(tidyverse)
+spatiotemporal_suitability <- read.csv('predictions/climatic_model_yearly_predictions.csv') %>%
+  group_by(h3_id) %>% 
+  nest() %>% 
+  mutate(
+    model = map(data,~ lm(prediction~year, data = .x)),
+    tidy_out = map(model, ~ tidy(.x,conf.int =T ))) %>% 
+  unnest(tidy_out) %>% 
+  filter(term == "year") %>% 
+  dplyr::select(h3_id, estimate, std.error, conf.low, conf.high) %>%
+  mutate(poly=h3jsr::cell_to_polygon(h3_id),
+         centroids=h3jsr::cell_to_point(h3_id),
+         lon=sf::st_coordinates(centroids)[,1],
+         lon=sf::st_coordinates(centroids)[,2]) %>% 
+  dplyr::select(-centroids)
+
+
+# add the polygons 
+suitability_vect <- st_as_sf(spatiotemporal_suitability,sf_column_name = "poly", crs = 4326)
+
+st_write(suitability_vect,
+         'predictions/habitat-suitability-slopes.shp')
+saveRDS(suitability_vect %>% as.tibble(),
+        'predictions/habitat-suitability-slopes.rds')
+
+bbox <- ext(suitability_vect) + 1
+xlims <- bbox[1:2]
+ylims <- bbox[3:4]
+
+library(rnaturalearth)
+world <- ne_countries(scale='large',returnclass='sf')
+world_crop <- st_crop(world,bbox)
+plot<-ggplot(suitability_vect) +
+  # set a nice background 
+  # coord_sf(xlim=xlims,
+  #   ylim=ylims,
+  #   expand=F
+  # ) +
+  #plot polygons
+  geom_sf(aes(fill = estimate,alpha=(1/std.error))
+          , color = NA) +   # color = NA removes borders
+  geom_sf(data=world,fill = 'grey90',color='NA')+
+  coord_sf(
+    xlim=xlims,
+    ylim=ylims,
+    expand=F
+  )+
+
+  scale_fill_gradient2(high = 'blue',
+                       mid = 'white',
+                       low = 'red',
+                       midpoint=0) +         # or any palette
+
+  scale_alpha(range=c(0.9,1)) +
+  theme(panel.background =element_rect(fill='#E5F3FD'),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())+
+  guides(alpha=F) + 
+
+  #theme_minimal() +
+
+  labs(fill = "Estimate")
+
+ggsave('plots/habitat-suitability-estimates-climate-slopes.svg',
+       plot)
+ggsave('plots/habitat-suitability-estimates-climate-slopes.pdf',
+       plot)
+
+```
+

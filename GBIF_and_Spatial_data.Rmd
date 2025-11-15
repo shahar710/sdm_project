@@ -150,24 +150,76 @@ marineco_intersecting <- marineco[marineco$ECO_CODE %in% polygon_ids, ]
 marineco_intersecting
 plot(marineco_intersecting)
 marineco_intersecting
-dissolved_marineco_intersecting<-terra::aggregate(marineco_intersecting)
-mapview(dissolved_marineco_intersecting)
 
-dissolved_marineco_intersecting
+#remove the isolated polygon
 
-vectfish_buffered <- terra::buffer(dissolved_marineco_intersecting, width = 30000)  # 10 km buffer
-mapview(dissolved_marineco_intersecting)
-mapview(vectfish_buffered)
+library(terra)
+library(igraph)
 
-library(geodata)
+# Get adjacency as edge list
+adj_edges <- adjacent(marineco_intersecting)
 
-earth<-world(resolution=5, level=0)
-earth_agg<-aggregate(earth)
-mapview(vectfish_buffered)
-final_buff<-erase(vectfish_buffered,earth_agg)
-mapview(final_buff)
+# Create graph from edge list
+graph <- igraph::graph_from_edgelist(adj_edges, directed = FALSE)
 
-terra::writeVector(final_buff, "C:/Users/geo_v/Desktop/SDM course/SDM_project/study_area_extent.shp")
+# Get the number of polygons
+n_polygons <- nrow(marineco_intersecting)
+
+# Check if all polygons are in the graph
+all_vertices <- 1:n_polygons
+current_vertices <- as.integer(V(graph))
+
+# Find missing vertices (isolated polygons)
+missing_vertices <- setdiff(all_vertices, current_vertices)
+
+# Add isolated vertices to the graph
+if (length(missing_vertices) > 0) {
+  graph <- add_vertices(graph, length(missing_vertices))
+}
+
+# Now find connected components
+components <- igraph::components(graph)
+
+# Add group identifier
+marineco_intersecting$connected_group <- components$membership
+
+# Check the grouping
+table(marineco_intersecting$connected_group)
+
+# Aggregate only if there are multiple polygons in a group
+aggregated_list <- list()
+for (group_id in unique(marineco_intersecting$connected_group)) {
+  group_polygons <- marineco_intersecting[marineco_intersecting$connected_group == group_id, ]
+  
+  if (nrow(group_polygons) > 1) {
+    # Aggregate multiple polygons
+    aggregated_group <- aggregate(group_polygons)
+    aggregated_list[[as.character(group_id)]] <- aggregated_group
+  } else {
+    # Keep single polygon as is
+    aggregated_list[[as.character(group_id)]] <- group_polygons
+  }
+}
+
+# keep only the large polygon
+
+final_aggregated_pol<-aggregated_list$`2`
+
+
+# 
+# vectfish_buffered <- terra::buffer(dissolved_marineco_intersecting, width = 30000)  # 10 km buffer
+# mapview(dissolved_marineco_intersecting)
+# mapview(vectfish_buffered)
+# 
+# library(geodata)
+# 
+# earth<-world(resolution=5, level=0)
+# earth_agg<-aggregate(earth)
+# mapview(vectfish_buffered)
+# final_buff<-erase(vectfish_buffered,earth_agg)
+# mapview(final_buff)
+
+terra::writeVector(final_aggregated_pol, "C:/Users/geo_v/Desktop/SDM course/SDM_project/study_area_extent_updated.shp",overwrite=TRUE)
 
 
 ```
