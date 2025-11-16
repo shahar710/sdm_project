@@ -1,0 +1,84 @@
+---
+title: "stage_8_thermal_pos_effects"
+author: "Shahar Chaikin"
+date: "2025-11-16"
+output: html_document
+---
+
+Estimate habitat suitability change and abundance change against thermal position
+```{r}
+library(tidyverse)
+```
+
+Load data
+```{r}
+hab_suit_change=read_rds("predictions/annual-habitat-suitability-slopes.rds") %>% 
+left_join(read.csv("thermal_pos.csv") %>% 
+  select(1,14),
+  by="h3_id")
+  
+abund_change=read_rds("abundance_pred/slopes_df_l_ocellata.rds") %>% 
+left_join(read.csv("thermal_pos.csv") %>% 
+  select(1,14),
+  by="h3_id")
+```
+
+Associate
+Habitat suitability
+```{r}
+library(mgcv)
+test_hab_t_pos=gam(data=hab_suit_change,formula = estimate~s(seabed_thermal_pos,k=6))
+test_hab_t_pos %>% summary
+test_hab_t_pos_gg=ggeffects::ggpredict(test_hab_t_pos,terms="seabed_thermal_pos[-1:1 by =0.01]")
+#performance::check_model(test_hab_t_pos)
+
+test_hab_t_pos_p=ggplot(hab_suit_change)+
+  geom_point(aes(x=seabed_thermal_pos,y=estimate),
+             color="grey",alpha=0.3)+
+  geom_hline(yintercept = 0,linetype="dashed",alpha=0.4)+
+  geom_vline(xintercept = 0,linetype="dashed",alpha=0.4)+
+  geom_ribbon(data=test_hab_t_pos_gg,
+              aes(x=x,ymin=conf.low,ymax=conf.high),
+              alpha=0.3)+
+  geom_line(data=test_hab_t_pos_gg,
+            aes(x=x,y=predicted))+
+  theme_classic()+
+  labs(x="Thermal position",y="Habitat suitability change",title="A) Temporal habitat suitability change")
+```
+
+abundance change
+```{r}
+test_abund_t_pos=lm(data=abund_change,formula = slope~seabed_thermal_pos)
+test_abund_t_pos %>% summary
+test_abund_t_pos_gg=ggeffects::ggpredict(test_abund_t_pos,terms="seabed_thermal_pos[-0.267:0.068 by =0.001]")
+#performance::check_model(test_hab_t_pos)
+
+test_abund_t_pos_p=ggplot(abund_change)+
+  geom_point(aes(x=seabed_thermal_pos,y=slope),
+             color="grey",alpha=0.3)+
+  geom_hline(yintercept = 0,linetype="dashed",alpha=0.4)+
+  geom_vline(xintercept = 0,linetype="dashed",alpha=0.4)+
+  geom_ribbon(data=test_abund_t_pos_gg,
+              aes(x=x,ymin=conf.low,ymax=conf.high),
+              alpha=0.3)+
+  geom_line(data=test_abund_t_pos_gg,
+            aes(x=x,y=predicted))+
+  theme_classic()+
+  labs(x="Thermal position",y="Aundance change",title="B) Temporal abundance change")
+```
+
+Grid
+```{r}
+panel=gridExtra::arrangeGrob(test_hab_t_pos_p+
+                         theme(axis.title.x = element_blank()),
+                       test_abund_t_pos_p+
+                         theme(axis.title.x = element_blank()),
+                       bottom = "Thermal position",
+                       layout_matrix = rbind(c(1,2)))
+
+
+ggsave(plot = panel,
+       filename = "./plots/panel.png",
+       device = "jpeg",width = 20,height = 10,units = "cm")
+```
+
