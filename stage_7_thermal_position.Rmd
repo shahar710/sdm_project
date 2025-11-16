@@ -11,13 +11,115 @@ Input:
 3) Suitability overtime (based on SDM)
 4) Abundance change over time (based on abundance time series lm)
 
-Library
+library
 ```{r}
-library(tidyverse)
+library(tidyverse)    # essential for data manipulation (dplyr, ggplot2, tidyr, readr)
+library(raster)       # for working with raster data (e.g., netcdf temperature files)
+library(h3jsr)        # r bindings for h3 geospatial indexing system
+library(sf)           # simple features for spatial data handling
+library(DataExplorer) # for data exploration and missingness plots (optional)
 ```
 
-Load GBIF data
+#1) Load spatial thinned occurrence data
 ```{r}
-sjPlot::plot_model(da)
+sp_thin_data=bind_rows(read.csv("raja_gbif_lite_thin_hexs_5thinned.csv")) %>% 
+  ungroup()
+
+sp_thin_data_coords=sp_thin_data %>% 
+  ungroup() %>% 
+  dplyr::select(lat,
+         lon) %>% 
+  mutate(h3_id=h3jsr::point_to_cell(
+    input = sf::st_as_sf(.,
+                         coords = c("lon", "lat"),  # Fixed column names
+                         crs = 4326), res = 5))
 ```
 
+#2) Load seabed temperature raster
+this section loads the seabed temperature raster data for estimating species' thermal ranges. The data is sourced from bio-oracle.
+```{r}
+# Load the netCDF file as a raster object
+seabed_temp_at_mean_depth <- "env_rast_croped_marine_ecore/btemp_rast.tif" 
+temp_raster <-read_rds("res_5_env/bottomT_df_h3_res_5_2.rds") %>% 
+  group_by(h3_id) %>% 
+  summarise(mean_bottomt=mean(btemp_mean),
+            median_bottomt=median(btemp_mean)) %>% 
+  mutate(poly=h3jsr::cell_to_polygon(h3_id))
+```
+
+#3) Overlap occurrence records with seabed temperatures.
+this step extracts the seabed temperature values corresponding to each species occurrence record. This is a step to link populations to their experienced thermal conditions. Records with missing temperature values (e.g., points on land or outside the raster's extent) are removed.
+```{r}
+# Extract temperature values from the raster at the specified coordinates
+extracted_seabedtemp <- sp_thin_data_coords %>% 
+  left_join(temp_raster %>% 
+              dplyr::select(1,2,3),
+            by="h3_id")
+
+sp_thin_data=extracted_seabedtemp %>% 
+  drop_na()
+```
+
+#4) Create per species seabed temperature summary
+this section calculates key summary statistics of seabed temperature for each species based on their occurrence records.
+```{r}
+sp_temp_data=sp_thin_data %>% 
+  drop_na(mean_bottomt) %>% 
+  ungroup() %>% 
+  summarise(n_occ=n(),
+            min_seabed_t=min(mean_bottomt),
+            mean_seabed_t=mean(mean_bottomt),
+            median_seabed_t=median(mean_bottomt),
+            max_seabed_t=max(mean_bottomt),
+            mid_point=(max_seabed_t+min_seabed_t)/2,
+            thermal_range=max_seabed_t-min_seabed_t) %>% 
+  mutate(across(where(is.numeric), round, digits = 3))
+```
+
+#5) Estimate the center temperature indices within each hexagon
+this section estimates the mean seabed temperature within each h3 hexagonal cell that defines a "population". this environmental context for the populations will be used to compare against the species' overall thermal range
+```{r}
+# Calculate summary statistics
+polygon_values_summary <- temp_raster %>%
+  group_by(h3_id) %>% 
+  summarize(
+    mean_temp = mean(mean_bottomt , na.rm = TRUE) %>% 
+      round(digits = 3), 
+    median_temp = median(mean_bottomt , na.rm = TRUE) %>% 
+      round(digits = 3))
+
+#Add info
+polygon_values_summary=polygon_values_summary %>% 
+  ungroup() %>% 
+  dplyr::select(h3_id,h3_mean_temp=mean_temp,h3_median_temp=median_temp) %>% 
+  mutate(h3_centroid=h3jsr::cell_to_point(h3_id),
+         h3_center_lon = as.numeric(str_extract(h3_centroid, "-?\\d+\\.\\d+")),
+         h3_center_lat = as.numeric(str_extract(h3_centroid, "\\s+(-?\\d+\\.\\d+)"))) %>%
+  dplyr::select(-h3_centroid) %>% 
+  drop_na()
+#write.csv(polygon_values_summary,"h3_id_seabed_temp.csv",row.names = F)
+```
+
+#6) Calculate thermal position index
+this section combines the species-level thermal information with the h3-level data to calculate a "seabed thermal position" index for each population. this index quantifies a population's thermal position relative to its species' overall thermal range.
+```{r}
+#Populations info
+pop_info=polygon_values_summary
+#Calculate thermal position - seabed
+thermal_pos= pop_info  %>%
+  mutate(species="Leucoraja ocellata") %>% 
+  left_join(sp_temp_data %>%
+  mutate(species="Leucoraja ocellata"),
+            by="species") %>% 
+  group_by(h3_id) %>% 
+  mutate(
+    seabed_thermal_pos=
+      ((h3_median_temp-median_seabed_t)/(max_seabed_t-mid_point)) %>% 
+           round(digits=3)) %>% 
+  drop_na(n_occ)
+
+thermal_pos$species %>% n_distinct()
+thermal_pos$seabed_thermal_pos %>% quantile(na.rm = T)
+#write.csv(thermal_pos,"thermal_pos.csv",row.names = F)
+DataExplorer::plot_missing(thermal_pos)
+```
