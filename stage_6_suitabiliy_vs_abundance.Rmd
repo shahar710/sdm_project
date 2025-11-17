@@ -13,7 +13,7 @@ library(tidyverse)
 #Climatic model
 Load abundance output
 ```{r}
-abundance=read_rds("abundance_pred/slopes_df_l_ocellata.rds")
+abundance_trends=read_rds("abundance_pred/slopes_df_l_ocellata.rds")
 ```
 
 Climatic SDM output
@@ -39,42 +39,42 @@ abund_suit_trends=abundance_trends %>%
 Plot relationship
 ```{r}
 abund_suit_trends_lm=lm(data=abund_suit_trends,
-                        formula = scaled_slope_ab~scaled_slope_sdm)
+                        formula = slope_ab~slope_sdm)
 summary(abund_suit_trends_lm)
-abund_suit_trends$scaled_slope_sdm %>% min
-abund_suit_trends$scaled_slope_sdm %>% max
+abund_suit_trends$slope_sdm %>% min
+abund_suit_trends$slope_sdm %>% max
 
 #performance::check_model(abund_suit_trends_lm)
 abund_suit_trends_lm_gg=ggeffects::ggpredict(abund_suit_trends_lm,
-                                             terms= "scaled_slope_sdm [-1.61:1.037 by=0.01]")
+                                             terms= "slope_sdm [-0.004:0.002 by=0.0001]")
 
 #Sclaed
 abund_suit_trends_p=ggplot(data=abund_suit_trends)+
   geom_vline(xintercept = 0,linetype=2,color = "grey")+
   geom_hline(yintercept = 0,linetype=2,color = "grey")+
-  geom_abline(slope = 1, intercept = 0, color = "black",alpha=0.4)+
-  geom_point(aes(y=scaled_slope_ab,
-                 x=scaled_slope_sdm),
+  #geom_abline(slope = 1, intercept = 0, color = "black",alpha=0.8)+
+  geom_point(aes(y=slope_ab,
+                 x=slope_sdm),
              color="grey")+
+  geom_ribbon(data=abund_suit_trends_lm_gg,
+              aes(x=x,ymin=conf.low,ymax=conf.high),
+              alpha=0.3)+
   geom_line(data=abund_suit_trends_lm_gg,
             aes(x=x,y=predicted))+
-  labs(x="Change in habitat suitability (scaled)",
-       y="Change in abundance (scaled)")+
-  coord_cartesian(xlim=c(-2,5),
-                  ylim=c(-2,5))+
+  labs(x="Change in habitat suitability",
+       y="Change in abundance",
+       title="A) Climatic model based")+
+  coord_cartesian(xlim=c(-0.004,0.004),
+                  ylim=c(-5,14))+
   theme_classic()
 abund_suit_trends_p
 
 ggsave(plot = abund_suit_trends_p,
-       filename = "abund_suit_trends_p.png",
+       filename = "./plots/abund_suit_trends_p.png",
        device = "jpeg",width = 15,height = 10,units = "cm")
 ```
 
 #Annual model
-Load abundance output
-```{r}
-abundance_trends=read_rds("abundance_pred/slopes_df_l_ocellata.rds")
-```
 
 Climatic SDM output
 ```{r}
@@ -99,35 +99,58 @@ abund_suit_trends_annual=abundance_trends %>%
 Plot relationship
 ```{r}
 abund_suit_trends_annual_lm=lm(data=abund_suit_trends_annual,
-                        formula = scaled_slope_ab~scaled_slope_sdm)
+                        formula = slope_ab~slope_sdm)
 summary(abund_suit_trends_annual_lm)
-abund_suit_trends_annual$scaled_slope_sdm %>% min
-abund_suit_trends_annual$scaled_slope_sdm %>% max
+abund_suit_trends_annual$slope_sdm %>% min
+abund_suit_trends_annual$slope_sdm %>% max
 
 #performance::check_model(abund_suit_trends_annual_lm)
 abund_suit_trends_annual_lm_gg=ggeffects::ggpredict(abund_suit_trends_annual_lm,
-                                             terms= "scaled_slope_sdm [-2.4:0.48 by=0.01]")
+                                             terms= "slope_sdm [-0.006:0.0007 by=0.00001]")
 
 #Sclaed
 abund_suit_trends_annual_p=ggplot(data=abund_suit_trends_annual)+
   geom_vline(xintercept = 0,linetype=2,color = "grey")+
   geom_hline(yintercept = 0,linetype=2,color = "grey")+
-  geom_abline(slope = 1, intercept = 0, color = "black",alpha=0.4)+
-  geom_point(aes(y=scaled_slope_ab,
-                 x=scaled_slope_sdm),
+  #geom_abline(slope = 1, intercept = 0, color = "black",alpha=0.4)+
+  geom_point(aes(y=slope_ab,
+                 x=slope_sdm),
              color="grey")+
   geom_line(data=abund_suit_trends_annual_lm_gg,
             aes(x=x,y=predicted))+
-  labs(x="Change in habitat suitability (scaled)",
-       y="Change in abundance (scaled)")+
-  coord_cartesian(xlim=c(-2.5,5),
-                  ylim=c(-2.5,5))+
+  geom_ribbon(data=abund_suit_trends_annual_lm_gg,
+              aes(x=x,ymin=conf.low,ymax=conf.high),
+              alpha=0.3)+
+  labs(x="Change in habitat suitability",
+       y="Change in abundance",
+       title="B) Annual model based")+
+  coord_cartesian(ylim=c(-4,14),
+                  xlim=c(-0.006,0.0007))+
   theme_classic()
 abund_suit_trends_annual_p
 
 ggsave(plot = abund_suit_trends_annual_p,
        filename = "./plots/abund_suit_trends_annual_p.png",
        device = "jpeg",width = 15,height = 10,units = "cm")
+```
+
+Bind
+```{r}
+panel=gridExtra::arrangeGrob(abund_suit_trends_p+
+                         theme(axis.title.x = element_blank(),
+                               axis.title.y = element_blank()),
+                       abund_suit_trends_annual_p+
+                         theme(axis.title.x = element_blank(),
+                               axis.title.y = element_blank()),
+                       bottom = "Change in habitat suitability",
+                       left = "Change in abundance",
+                       layout_matrix = rbind(c(1,2)))
+
+
+ggsave(plot = panel,
+       filename = "./plots/abund_vs_suit.png",
+       device = "jpeg",width = 20,height = 10,units = "cm")
+
 ```
 
 Georgos doing correlations
